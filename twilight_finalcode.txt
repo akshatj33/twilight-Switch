@@ -1,0 +1,1263 @@
+#include <msp430.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <stdio.h>
+//#include <math.h>
+
+#define CMD         0
+#define DATA        1
+
+/*#define LCD_OUT     P2OUT
+#define LCD_DIR     P2DIR
+#define D4          BIT4
+#define D5          BIT5
+#define D6          BIT6
+#define D7          BIT7
+#define RS          BIT2
+#define EN          BIT3
+*/
+#define D4          BIT4
+#define D5          BIT3
+#define D6          BIT2
+#define D7          BIT1
+#define RS          BIT1
+#define EN          BIT0
+#define BYTE uint8_t
+volatile int lo1=0, lo2=0, lo3=0 ,lo4=0 ,lo5=0,la1=0,la2=0,la3=0,la4=0,la5=0,tz1=0,tz2=0,tz3=0,tz4=0;
+BYTE lodir=0, ladir=0, tzdir=0;
+ volatile int z=-1;
+//int p=0;
+int j,m,n,t;
+int flag=-1;                     //for after selecting city
+BYTE day=0;
+BYTE mon=0;
+BYTE ye=16;
+BYTE hou=0;
+BYTE min=0;
+int t1;
+int t2;
+BYTE t1h;
+BYTE t1m;
+BYTE t2h;
+BYTE t2m;
+float longi;
+int  k=0;
+int d=0;
+int fz1=0,fz2=0;
+int ck=0;
+int flag1=0;
+float count=0;
+// Declare variables to store the information
+BYTE second, minute, hour, dayOfWeek, dayOfMonth, month, year;
+
+// An array for the days; RTC output is only an integer (Example: 0 - Sunday, 1 - Monday...)
+char *days[] = {"Sun",
+               "Mon",
+               "Tue",
+               "Wed",
+               "Thu",
+               "Fri",
+               "Sat"};
+int noon[12][6]={
+       {1205,1212,1218,20,21,12},
+       {1223,1221,1221,4,3,-9},
+       {1220,1217,1211,-13,-17,-20},
+       {1203,1206,1198,-20,-13,-11},
+       {1195,1194,1194,-5,+6,7},
+       {1195,1198,1203,9,12,12},
+       {1205,1208,1210,10,6,0},
+       {1210,1208,1210,-6,-12,-17},
+       {1200,1193,1188,-20,-21,-21},
+       {1181,1176,1173,-17,13,-6},
+       {1171,1173,1175,2,12,18},
+       {1160,1187,1197,25,29,30},
+
+       };
+int *addr = (int *)0x01000; // Address of the flash memory segment starting
+    int *addr2 = (int *)0x01000 ;
+int fl=0,fl2=0,fl3=0;
+// Prototypes
+void init_I2C();
+void set_Time();
+void read_Time();
+BYTE bcdToDec(BYTE);
+BYTE decToBcd(BYTE);
+void delay(uint8_t);
+void pulseEN(void);
+void lcd_write(uint8_t, uint8_t);
+void lcd_print(char*);
+void lcd_print_num(BYTE x);
+void lcd_print_num1(int x);
+void lcd_print_num2(int x);
+void lcd_print_num3(int x);
+void lcd_setCursor(uint8_t, uint8_t);
+void lcd_init();
+void algo(int longit, int latit, int timezone, int day, int month);
+float cos(float x);
+float sin(float x);
+float acos(float x);
+void flash_erase(int *addr)
+{
+  __disable_interrupt();               // Disable interrupts. This is important, otherwise,
+                                       // a flash operation in progress while interrupt may
+                                       // crash the system.
+  while(BUSY & FCTL3);                 // Check if Flash being used
+  FCTL2 = FWKEY + FSSEL_1 + FN3;       // Clk = SMCLK/4
+  FCTL1 = FWKEY + ERASE;               // Set Erase bit
+  FCTL3 = FWKEY;                       // Clear Lock bit
+  *addr = 0;                           // Dummy write to erase Flash segment
+  while(BUSY & FCTL3);                 // Check if Flash being used
+  FCTL1 = FWKEY;                       // Clear WRT bit
+  FCTL3 = FWKEY + LOCK;                // Set LOCK bit
+  __enable_interrupt();
+}
+void flash_write(int *addr,int m,int n,int t)
+{
+  __disable_interrupt();
+  FCTL2 = FWKEY + FSSEL_1 + FN0;       // Clk = SMCLK/4
+  FCTL3 = FWKEY;                       // Clear Lock bit
+  FCTL1 = FWKEY + WRT;                 // Set WRT bit for write operation
+
+  *addr++ = m;         // copy value to flash
+  *addr++ = n;         // copy value to flash
+  *addr++ = t;
+  FCTL1 = FWKEY;                        // Clear WRT bit
+  FCTL3 = FWKEY + LOCK;                 // Set LOCK bit
+  while(BUSY & FCTL3);
+  __enable_interrupt();
+}
+
+/*
+ *
+ * main.c
+ */
+ int main(void) {
+    WDTCTL = WDTPW | WDTHOLD;                                                       // Stop watchdog timer
+
+    // Character arrays for the RTC output
+    char tempSecond[10], tempMinute[10],
+    tempHour[10],
+    tempdayOfMonth[10], tempMonth[10],
+    tempYear[10];
+
+    // Variables to check whether RTC output is 1-or-2 digit
+    int secondZero = 0, minuteZero = 0, hourZero = 0, dayZero = 0, monthZero = 0;
+
+    // Initialize I2C
+    init_I2C();
+    // Initialize LCD
+    lcd_init();
+
+    P1DIR |=BIT6;
+    P1DIR &=~BIT0;      //for navigation pin
+    P2DIR |=BIT2;       //for triac pin
+    P2OUT&=~BIT2;
+    __enable_interrupt();
+    P1DIR &=~BIT5;
+    P1SEL|=BIT5;
+
+    ADC10CTL0&=~ENC;
+    ADC10CTL0|=ADC10IE;
+    ADC10CTL1|=INCH_0+ADC10SSEL_3;
+    ADC10AE0 |=BIT0;
+    ADC10CTL0|=ADC10ON;
+
+
+     lcd_init();
+     lcd_setCursor(0,5);
+     lcd_print("Welcome");
+     __delay_cycles(1000000);
+
+    while(1)
+    {
+        ADC10CTL0|=ENC+ADC10SC;
+
+                while(ADC10BUSY&ADC10CTL1);
+                j=ADC10MEM;
+
+                count=count+0.01;
+               // lcd_print("Welcome");
+
+
+if (flag==9){
+    flag=10;
+                              ADC10CTL0&=~ENC;
+                              ADC10CTL0&=~ADC10SC;
+                              if(fz1==1)
+                              {
+                                  flash_erase(addr);
+                                                                                flash_write(addr,m,n,t);
+                                                                                fz1=fz1+1;
+                              }
+                              if(fz2==0)
+                              {fz2=fz2+1;
+
+                                  m=*addr2;
+                                  n=*(addr2+1);
+                                  t=*(addr2+2);
+                              }
+                               ck=1;                                               //end of while
+}
+if(flag==10)
+   {
+   flag=11;
+       lcd_write(0x01, CMD);
+       __delay_cycles(20);
+       lcd_setCursor(0,0);
+     //  lcd_print("RISE");
+       //lcd_print("/");
+       //__delay_cycles(20);
+       lcd_print_num1(m);
+       __delay_cycles(2000000);
+       lcd_write(0x01, CMD);
+              __delay_cycles(20);
+       lcd_setCursor(0,0);
+     // lcd_print("SET:");
+       lcd_print_num3(n);
+       __delay_cycles(2000000);
+       lcd_write(0x01, CMD);
+               __delay_cycles(20);
+               lcd_setCursor(0,0);
+               lcd_print_num2(t);
+               __delay_cycles(2000000);
+   }
+
+if(flag==11)
+{
+
+    if( (j>=700 && j<800))
+                                            {
+                                                __delay_cycles(30000);
+                                                flag = 0;
+                                                j=0;
+                                                ADC10CTL0|=ENC;
+                                                                             ADC10CTL0|=ADC10SC;
+                                            }
+        secondZero = 0;
+        minuteZero = 0;
+        hourZero = 0;
+        dayZero = 0;
+        monthZero = 0;
+
+        // Read time from RTC
+
+                read_Time();
+
+
+                               t1h=t1/100;     //t1 hour
+                                                            t1m=t1%100;     //t1min
+                                                            t2h=t2/100;     //t2 hour
+                                                            t2m=t2%100;     //t2 min
+
+                                    if(hour>=t1h && hour<t2h)
+
+                                   {    if(hour==t1h && minute>=t1m)
+                                       P2OUT&=~BIT2;
+                                   else if(hour>t1h)
+                                       P2OUT&=~BIT2;
+                                    //__delay_cycles(60000600);
+                                    }
+                                    if (hour>=t2h || hour<=t1h)
+                                     {  if( hour==t2h && minute>=t2m)
+                                        P2OUT|=BIT2;
+                                     else if(hour>t2h ||(hour<=t1h && minute<t1m))
+                                         P2OUT|=BIT2;
+                                    //__delay_cycles(60000600);
+                                    }
+        // Check whether RTC output is 1-or-2 digit
+        if(second < 10)
+            secondZero = 1;
+        if(minute < 10)
+            minuteZero = 1;
+        if(hour < 10)
+            hourZero = 1;
+        if(dayOfMonth < 10)
+            dayZero = 1;
+        if(month < 10)
+            monthZero = 1;
+
+
+        // Store the RTC output in a character array as a string
+        sprintf(tempSecond, "%d", second);
+        sprintf(tempMinute, "%d", minute);
+        sprintf(tempHour, "%d", hour);
+        sprintf(tempdayOfMonth, "%d", dayOfMonth);
+        sprintf(tempMonth, "%d", month);
+        sprintf(tempYear, "%d", year);
+
+        // Set cursor to the beginning of the display
+        lcd_setCursor(0, 0);
+        // Print 'day'
+        lcd_print(*(days + dayOfWeek));
+        lcd_print(" ");
+        // If 'dayOfMonth' is 1-digit, prints a zero before
+        if(dayZero == 1)
+            lcd_print("0");
+        // Print 'dayOfMonth'
+        lcd_print(tempdayOfMonth);
+        lcd_print("/");
+        // If 'month' is 1-digit, prints a zero before
+        if(monthZero == 1)
+            lcd_print("0");
+        // Print 'month'
+        lcd_print(tempMonth);
+        lcd_print("/");
+        // Print 'year'
+        lcd_print(tempYear);
+        lcd_setCursor(1, 0);
+        // If 'hour' is 1-digit, prints a zero before
+        if(hourZero == 1)
+            lcd_print("0");
+        // Print 'hour'
+        lcd_print(tempHour);
+        lcd_print(":");
+        if(minuteZero == 1)
+            lcd_print("0");
+        lcd_print(tempMinute);
+        lcd_print(":");
+        if(secondZero == 1)
+            lcd_print("0");
+        lcd_print(tempSecond);
+        lcd_setCursor(1,15);
+        __delay_cycles(1000000);
+        //lcd_write(0x01, CMD);
+        //delay(20);
+}
+    }
+}
+
+                         //   from here
+
+#pragma vector = ADC10_VECTOR;
+__interrupt void p1(void)
+{
+    //P1OUT^=BIT0;
+     _delay_cycles(200000);
+     if(flag==-1)
+     {
+         lcd_write(0x01, CMD);           // Clear screen
+                     delay(20);
+                     lcd_setCursor(0,0);
+                                lcd_print(" INITIALIZE RTC:");
+                                lcd_setCursor(1,0);
+                                                                lcd_print("Y/N");
+
+                                if(ADC10IFG && (j>=800 && j<850))
+                                        {
+                                            __delay_cycles(300000);
+                                            flag = 9;
+                                            j=0;
+                                        }
+                                else if(ADC10IFG&&(j>=500 && j<550))
+                                       { __delay_cycles(300000);
+                                       flag = 0;
+                                       j=0;
+                                       flag1=1;
+                                       }
+                             //   int c1=(int)count;
+                                if(count>0.5)
+                                                                          {    flag=9;
+                                                                                j=0;
+                                                                          }
+     }
+     if (flag==0)
+     {
+         if(ADC10IFG && (j>=0 && j<50))
+                {
+                    //  __delay_cycles(300000);
+                    lcd_write(0x01, CMD);           // Clear screen
+                    delay(20);
+                    d=d+1;
+                    if(d==7)
+                        d=0;
+                    lcd_setCursor(0,0);
+                    lcd_print("DAY OF WEEK:");
+                    lcd_setCursor(1,0);
+                    lcd_print_num(d);
+                }
+                else if(ADC10IFG && (j>=800 && j<850))
+                {
+                    __delay_cycles(300000);
+                    flag = 1;
+                    j=0;
+                }
+
+     }
+    if(flag==1)
+    {
+        if(ADC10IFG && (j>=0 && j<50))
+        {
+            //  __delay_cycles(300000);
+            lcd_write(0x01, CMD);           // Clear screen
+            delay(20);
+            day=day+1;
+            if(day==32)
+                day=1;
+            lcd_setCursor(0,0);
+            lcd_print("DAY:");
+            lcd_setCursor(1,0);
+            lcd_print_num(day);
+        }
+        else if(ADC10IFG && (j>=800 && j<850))
+        {
+            __delay_cycles(300000);
+            flag = 2;
+            j=0;
+        }
+        else if(ADC10IFG&&(j>=500 && j<550))
+        {
+            //    __delay_cycles(300000);
+            lcd_write(0x01, CMD);           // Clear screen
+            delay(20);
+            day=day-1;
+            if(day==0)
+                day=31;
+            lcd_setCursor(0,0);
+            lcd_print("DAY:");
+            lcd_setCursor(1,0);
+            lcd_print_num(day);
+        }
+    }
+    if(flag==2)
+    {
+        if(ADC10IFG&&(j>=0 && j<50))
+        {
+            //  __delay_cycles(300000);
+            lcd_write(0x01, CMD);           // Clear screen
+            delay(20);
+            mon=mon+1;
+            if(mon==13)
+                mon=1;
+            lcd_setCursor(0,0);
+            lcd_print("MONTH:");
+            lcd_setCursor(1,0);
+            lcd_print_num(mon);
+        }
+        else if(ADC10IFG&&(j>=800 && j<850))
+        {
+            __delay_cycles(300000);
+            flag = 3;
+            j=0;
+        }
+        else if(ADC10IFG&&(j>=500 && j<550))
+        {
+            //    __delay_cycles(300000);
+            lcd_write(0x01, CMD);           // Clear screen
+            delay(20);
+            mon=mon-1;
+            if(mon==0)
+                mon=12;
+            lcd_setCursor(0,0);
+            lcd_print("MONTH:");
+            lcd_setCursor(1,0);
+            lcd_print_num(month);
+        }
+    }
+    if(flag==3)
+    {
+        if(ADC10IFG&&(j>=0 && j<50))
+        {
+            //  __delay_cycles(300000);
+            lcd_write(0x01, CMD);           // Clear screen
+            delay(20);
+            ye=ye+1;
+            if(ye==31)
+                ye= 17;
+            lcd_setCursor(0,0);
+            lcd_print("YEAR:");
+            lcd_setCursor(1,0);
+            lcd_print("20");
+            lcd_setCursor(1,2);
+            lcd_print_num(ye);
+        }
+        else if(ADC10IFG&&(j>=800 && j<850))
+        {
+            __delay_cycles(300000);
+            flag = 4;
+            j=0;
+        }
+        else if(ADC10IFG&&(j>=500 && j<550))
+        {
+            //    __delay_cycles(300000);
+            lcd_write(0x01, CMD);           // Clear screen
+            delay(20);
+            ye=ye-1;
+            if(ye==16)
+                ye=30;
+            lcd_setCursor(0,0);
+            lcd_print("YEAR:");
+            lcd_setCursor(1,0);
+            lcd_print("20");
+            lcd_setCursor(1,2);
+            lcd_print_num(ye);
+        }
+
+    }
+
+    if(flag==4)
+    {
+        if(ADC10IFG&&(j>=0 && j<50))
+        {
+            //  __delay_cycles(300000);
+            lcd_write(0x01, CMD);           // Clear screen
+            delay(20);
+            hou=hou+1;     //user hou for hour
+            if(hou==24)
+                hou=0 ;
+            lcd_setCursor(0,0);
+            lcd_print("ENTER TIME:HOUR");
+            lcd_setCursor(1,0);
+            lcd_print_num(hou);
+        }
+        else if(ADC10IFG&&(j>=800 && j<850))
+        {
+            __delay_cycles(300000);
+            flag = 5;
+            j=0;
+        }
+        else if(ADC10IFG&&(j>=500 && j<550))
+        {
+            //    __delay_cycles(300000);
+            lcd_write(0x01, CMD);           // Clear screen
+            delay(20);
+            hou=hou-1;
+            if(hou==-1)
+                hou=23;
+            lcd_setCursor(0,0);
+            lcd_print("ENTER TIME:HOUR");
+            lcd_setCursor(1,0);
+            lcd_print_num(hou);
+        }
+    }
+    if(flag==5)
+    {
+        if(ADC10IFG&&(j>=0 && j<50))
+        {
+            //  __delay_cycles(300000);
+            lcd_write(0x01, CMD);           // Clear screen
+            delay(20);
+            min=min+1;
+            if(min==60)
+                min= 0;
+            lcd_setCursor(0,0);
+            lcd_print("ENTER TIME:MIN");
+            lcd_setCursor(1,0);
+            lcd_print_num(min);
+        }
+        else if(ADC10IFG&&(j>=800 && j<850))
+        {
+            __delay_cycles(300000);
+            flag = 6;
+            j=0;
+        }
+        else if(ADC10IFG&&(j>=500 && j<550))
+        {
+            //    __delay_cycles(300000);
+            lcd_write(0x01, CMD);           // Clear screen
+            delay(20);
+            min=min-1;
+            if(min==-1)
+                min=00;
+            lcd_setCursor(0,0);
+            lcd_print("ENTER TIME:MIN");
+            lcd_setCursor(1,0);
+            lcd_print_num(min);
+        }
+        second = 0;
+                                           minute = min;
+                                             hour = hou;
+                                             dayOfMonth = day;
+                                             dayOfWeek = d;
+                                             month = mon;
+                                             year = ye;
+                                             set_Time();
+    }
+
+    if(flag==6)
+    {
+
+
+        if(ADC10IFG&&(j>=0 && j<50))
+        {
+          lcd_write(0x01,CMD);
+          delay(20);
+          if(z==0)
+                    {
+
+                        lodir = lodir+1;
+                        if(lodir>1)
+                            lodir=0;
+                    }
+          if(z==1)
+          {
+
+              lo1=lo1+1;
+              if(lo1>1)
+                  lo1=0;
+          }
+          if(z==2)
+                    {
+                        lo2=lo2+1;
+                        if(lo2>8)
+                            lo2=0;
+                    }
+          if(z==3)
+                    {
+                        lo3=lo3+1;
+                        if(lo3>9)
+                            lo3=0;
+                    }
+          if(z==4)
+                    {
+                        lo4=lo4+1;
+                        if(lo4>9)
+                            lo4=0;
+                    }
+          if(z==5)
+                    {
+                        lo5=lo5+1;
+                        if(lo5>9)
+                            lo5=0;
+                    }
+          ck=0;
+          fl=0,fl2=0,fl3=0;
+         lcd_setCursor(0,0);
+          lcd_print("LONGITUDE:");
+          lcd_setCursor(1,0);
+          if(lodir==0)
+              lcd_write(43, DATA);
+          else
+              lcd_write(45, DATA);
+           m=lo5 + (lo4*10) + (lo3*100) + (lo2*1000) + (lo1*10000);
+          lcd_setCursor(1,1);
+          lcd_print_num1(m);
+
+        }
+        else if(ADC10IFG&&(j>=800 && j<850))
+        {
+
+         __delay_cycles(300000);
+         flag = 7;
+         j=0;
+         z=-1;
+         if(lodir==1)
+                         m=-1*m;
+        }
+        else if(ADC10IFG&&(j>=500 && j<550))
+        {
+            delay(20);
+          z=z+1;
+          if(z>5)
+                        z=0;
+          }
+    }
+
+
+    if(flag==7)
+       {
+
+
+           if(ADC10IFG&&(j>=0 && j<50))
+           {
+             lcd_write(0x01,CMD);
+             delay(20);
+             if(z==0)
+                       {
+
+                           ladir = ladir+1;
+                           if(ladir>1)
+                               ladir=0;
+                       }
+             if(z==1)
+             {
+
+                 la1=la1+1;
+                 if(la1>1)
+                     la1=0;
+             }
+             if(z==2)
+                       {
+                           la2=la2+1;
+                           if(la2>8)
+                               la2=0;
+                       }
+             if(z==3)
+                       {
+                           la3=la3+1;
+                           if(la3>9)
+                               la3=0;
+                       }
+             if(z==4)
+                       {
+                           la4=la4+1;
+                           if(la4>9)
+                               la4=0;
+                       }
+             if(z==5)
+                       {
+                           la5=la5+1;
+                           if(la5>9)
+                               la5=0;
+                       }
+            lcd_setCursor(0,0);
+             lcd_print("LATITUDE:");
+             lcd_setCursor(1,0);
+             if(ladir==0)
+                 lcd_write(43, DATA);
+             else
+                 lcd_write(45, DATA);
+              n=la5 + (la4*10) + (la3*100) + (la2*1000) + (la1*10000);
+             lcd_setCursor(1,1);
+             lcd_print_num1(n);
+
+           }
+           else if(ADC10IFG&&(j>=800 && j<850))
+           {
+
+            __delay_cycles(300000);
+            flag = 8;
+            j=0;
+            z=-1;
+            if(ladir==1)
+                            n=-1*n;
+           }
+           else if(ADC10IFG&&(j>=500 && j<550))
+           {
+               delay(20);
+             z=z+1;
+             if(z>5)
+                           z=0;
+             }
+       }
+    if(flag==8)
+       {
+
+
+           if(ADC10IFG&&(j>=0 && j<50))
+           {
+             lcd_write(0x01,CMD);
+             delay(20);
+             if(z==0)
+                       {
+
+                           tzdir = tzdir+1;
+                           if(tzdir>1)
+                               tzdir=0;
+                       }
+             if(z==1)
+             {
+
+                 tz1=tz1+1;
+                 if(tz1>1)
+                     tz1=0;
+             }
+             if(z==2)
+                       {
+                           tz2=tz2+1;
+                           if(tz2>9)
+                               tz2=0;
+                       }
+             if(z==3)
+                       {
+                           tz3=tz3+1;
+                           if(tz3>5)
+                               tz3=0;
+                       }
+             if(z==4)
+                   {
+                       tz4=tz4+1;
+                        if(tz4>9)
+                          tz4=0;
+                                    }
+            lcd_setCursor(0,0);
+             lcd_print("TIME ZONE:");
+             lcd_setCursor(1,0);
+             if(tzdir==0)
+                 lcd_write(43, DATA);
+             else
+                 lcd_write(45, DATA);
+              t=tz4 + (tz3*10) + (tz2*100) + tz1*1000;
+             lcd_setCursor(1,1);
+             lcd_print_num2(t);
+
+           }
+           else if(ADC10IFG&&(j>=800 && j<850))
+           {
+
+            __delay_cycles(300000);
+            flag = 9;
+            j=0;
+            z=-1;
+            if(tzdir==1)
+                t=-1*t;
+            fz1=1;
+            ck=1;
+           }
+           else if(ADC10IFG&&(j>=500 && j<550))
+           {
+               delay(20);
+             z=z+1;
+             if(z>4)
+               z=0;
+             }
+       }
+
+
+    ADC10CTL0 &=~ ADC10IFG;
+}
+
+
+BYTE bcdToDec(BYTE value)
+{
+    return (((value & 0xF0) >> 4) * 10) + (value & 0x0F);
+}
+
+BYTE decToBcd(BYTE value)
+{
+    return (((value / 10) << 4) | (value % 10));
+}
+
+void init_I2C()
+{
+    P1SEL |= BIT6 + BIT7;                       // Assign I2C pins to USCI_B0
+    P1SEL2 |= BIT6 + BIT7;
+    UCB0CTL1 |= UCSWRST;                        // Enable SW reset
+    UCB0CTL0 = UCMST + UCMODE_3 + UCSYNC;
+    UCB0CTL1 = UCSSEL_2 + UCSWRST;
+    UCB0BR0 = 12;
+    UCB0BR1 = 0;
+    UCB0I2CSA = 0x51;
+    UCB0CTL1 &= ~UCSWRST;
+}
+
+void set_Time()
+{
+   BYTE regAddress = 0x00, controlData = 0x28;
+
+   while(UCB0CTL1 & UCTXSTP);
+
+   UCB0CTL1 |= UCTR + UCTXSTT;
+   while(!(IFG2 & UCB0TXIFG));
+   UCB0TXBUF = regAddress;
+   while(!(UCB0CTL1 & UCTXSTT));
+   UCB0TXBUF = controlData;
+   UCB0CTL1 |= UCTXSTP;
+//   while(!(IFG2 & UCB0TXIFG));
+
+   while(UCB0CTL1 & UCTXSTP);
+   regAddress = 0x02;
+
+   UCB0CTL1 |= UCTR + UCTXSTT;
+   while(!(IFG2 & UCB0TXIFG));
+
+   UCB0TXBUF = regAddress;
+   while(!(IFG2 & UCB0TXIFG));
+
+   UCB0TXBUF = (decToBcd(second) | 0b10000000);
+   while(!(IFG2 & UCB0TXIFG));
+
+   UCB0TXBUF = decToBcd(minute);
+   while(!(IFG2 & UCB0TXIFG));
+
+   UCB0TXBUF = decToBcd(hour);
+   while(!(IFG2 & UCB0TXIFG));
+
+   UCB0TXBUF = decToBcd(dayOfMonth);
+   while(!(IFG2 & UCB0TXIFG));
+
+   UCB0TXBUF = decToBcd(dayOfWeek);
+   while(!(IFG2 & UCB0TXIFG));
+
+   UCB0TXBUF = decToBcd(month);
+   while(!(IFG2 & UCB0TXIFG));
+
+   UCB0TXBUF = decToBcd(year);
+//   UCB0CTL1 |= UCTXSTP;
+   while(!(IFG2 & UCB0TXIFG));
+
+//   while(UCB0CTL1 & UCTXSTP);
+   regAddress = 0x00;
+   controlData = 0x08;
+
+   UCB0CTL1 |= UCTR + UCTXSTT;
+   while(!(IFG2 & UCB0TXIFG));
+   UCB0TXBUF = regAddress;
+   while(!(IFG2 & UCB0TXIFG));
+   UCB0TXBUF = controlData;
+   UCB0CTL1 |= UCTXSTP;
+//   while(!(IFG2 & UCB0TXIFG));
+}
+void read_Time()
+{
+
+    BYTE TXData = 0x02;
+
+    while(UCB0CTL1 & UCTXSTP);
+
+    UCB0CTL1 |= UCTR + UCTXSTT;
+    while(!(IFG2 & UCB0TXIFG));
+    UCB0TXBUF = TXData;
+    while(!(IFG2 & UCB0TXIFG));
+
+    UCB0CTL1 |= UCTXSTT;
+    UCB0CTL1 &= ~UCTR;
+    while(UCB0CTL1 & UCTXSTT);
+
+
+    while(!(IFG2 & UCB0RXIFG));
+    second = bcdToDec(UCB0RXBUF & 0b01111111);
+
+    while(!(IFG2 & UCB0RXIFG));
+    minute = bcdToDec(UCB0RXBUF & 0b01111111);
+
+
+    while(!(IFG2 & UCB0RXIFG));
+    hour = bcdToDec(UCB0RXBUF & 0b00111111);
+
+    while(!(IFG2 & UCB0RXIFG));
+    dayOfMonth = bcdToDec(UCB0RXBUF & 0b00111111);
+
+    while(!(IFG2 & UCB0RXIFG));
+    dayOfWeek = bcdToDec(UCB0RXBUF & 0b00000111);
+
+    while(!(IFG2 & UCB0RXIFG));
+    month = bcdToDec(UCB0RXBUF & 0b00011111);
+
+    UCB0CTL1 |= UCTXSTP;
+    while(!(IFG2 & UCB0RXIFG));
+    year = bcdToDec(UCB0RXBUF);
+
+
+
+    algo(m,n,t,dayOfMonth,month) ;           //for setting the twilight time
+
+
+
+
+
+}
+
+void delay(uint8_t t)
+{
+    uint8_t i;
+    for(i=t; i > 0; i--)
+        __delay_cycles(100);
+}
+
+void pulseEN(void)
+{
+                            //LCD_OUT |= EN;
+    P2OUT|=EN;
+    delay(1);
+                            //LCD_OUT &= ~EN;
+    P2OUT&=~EN;
+    delay(1);
+}
+
+void lcd_write(uint8_t value, uint8_t mode)
+{
+    if(mode == CMD)
+        P2OUT &= ~RS;             // Set RS -> LOW for Command mode
+    else
+        P2OUT |= RS;              // Set RS -> HIGH for Data mode
+
+                                    //LCD_OUT = ((LCD_OUT & 0x0F) | (value & 0xF0));
+    // Write high nibble first
+    P1OUT=((value & BIT7)/64)+((value & BIT6)/16)+((value & BIT5)/4)+(value & BIT4);
+    pulseEN();
+    delay(1);
+
+                                    //LCD_OUT = ((LCD_OUT & 0x0F) | ((value << 4) & 0xF0));
+    // Write low nibble next
+    P1OUT=((value & BIT3)/4)+(value & BIT2)+((value & BIT1)*4)+((value & BIT0)*16);
+    pulseEN();
+    delay(1);
+}
+
+void lcd_print_num(BYTE x)
+{
+        int y;
+        y=x%10;
+        y=y+48;
+        x=x/10;
+        x=x+48;
+        lcd_write(x, DATA);
+        lcd_write(y, DATA);
+}
+
+void lcd_print_num1(int x)
+{
+    if(x<0)
+    {
+        fl=1;
+        x=-x;
+    }
+        int y1, y2,y3,y4,y5;
+        int x1,x2,x3;
+        y1=x/10000 + 48;
+        x1= x%10000;
+        y2 = x1/1000 +48;
+        x2= x1%1000;
+         y3 = x2/100 +48;
+         x3= x2%100;
+         y4 = x3/10 +48;
+         y5= x3%10 +48;
+         if(ck==1)
+         {            lcd_print("LONGITUDE:");
+         lcd_setCursor(1,0);
+         }
+        if(fl==1)
+            lcd_print("-");
+        lcd_write(y1, DATA);
+        lcd_write(y2, DATA);
+        lcd_write(y3, DATA);
+        lcd_write(46, DATA);
+        lcd_write(y4, DATA);
+        lcd_write(y5, DATA);
+}
+void lcd_print_num3(int x)
+{
+    if(x<0)
+    {
+        fl3=1;
+        x=-x;
+    }
+        int y1, y2,y3,y4,y5;
+        int x1,x2,x3;
+        y1=x/10000 + 48;
+        x1= x%10000;
+        y2 = x1/1000 +48;
+        x2= x1%1000;
+         y3 = x2/100 +48;
+         x3= x2%100;
+         y4 = x3/10 +48;
+         y5= x3%10 +48;
+         if(ck==1)
+         {  lcd_print("LATITUDE:");
+         lcd_setCursor(1,0);
+         }
+        if(fl3==1)
+            lcd_print("-");
+        lcd_write(y1, DATA);
+        lcd_write(y2, DATA);
+        lcd_write(y3, DATA);
+        lcd_write(46, DATA);
+        lcd_write(y4, DATA);
+        lcd_write(y5, DATA);
+}
+void lcd_print_num2(int x)
+{
+    if(x<0)
+       {
+           fl2=1;
+           x=-x;
+       }
+        int y1, y2,y3,y4;
+        int x1,x2;
+         y1 = x/1000 +48;
+         x1= x%1000;
+         y2 = x1/100 +48;
+         x2= x1%100;
+         y3=x2/10+48;
+         y4=x2%10+48;
+         if(ck==1)
+         {      lcd_print("ZONE:");
+         lcd_setCursor(1,0);
+         }
+
+         if(fl2==1)
+             lcd_print("-");
+        lcd_write(y1, DATA);
+        lcd_write(y2, DATA);
+        lcd_print(":");
+        lcd_write(y3, DATA);
+        lcd_write(y4, DATA);
+}
+
+
+
+void lcd_print(char *s)
+{
+    while(*s)
+    {
+        lcd_write(*s, DATA);
+        s++;
+    }
+}
+
+void lcd_setCursor(uint8_t row, uint8_t col)
+{
+    const uint8_t row_offsets[] = { 0x00, 0x40};
+    lcd_write(0x80 | (col + row_offsets[row]), CMD);
+    delay(1);
+}
+
+
+// Initialize LCD
+void lcd_init()
+{
+                                //P2SEL &= ~(BIT6+BIT7);
+                                //LCD_DIR |= (D4+D5+D6+D7+RS+EN);
+    P1DIR |= (D4+D5+D6+D7);
+    P2DIR|=(RS+EN);
+    P1OUT &= ~(D4+D5+D6+D7);
+    P2OUT&=~(RS+EN);
+
+    delay(150);                     // Wait for power up ( 15ms )
+    lcd_write(0x33, CMD);           // Initialization Sequence 1
+    delay(50);                      // Wait ( 4.1 ms )
+    lcd_write(0x32, CMD);           // Initialization Sequence 2
+    delay(1);                       // Wait ( 100 us )
+
+    // All subsequent commands take 40 us to execute, except clear & cursor return (1.64 ms)
+
+    lcd_write(0x28, CMD);           // 4 bit mode, 2 line
+    delay(1);
+
+    lcd_write(0x0F, CMD);           // Display ON, Cursor ON, Blink ON
+    delay(1);
+
+    lcd_write(0x01, CMD);           // Clear screen
+    delay(20);
+
+    lcd_write(0x06, CMD);           // Auto Increment Cursor
+    delay(1);
+
+    lcd_setCursor(0,0);             // Goto Row 1 Column 1
+}
+
+float cos(float x)
+{ int  i=0;
+int  k=0;
+ while(x>=3.14)
+ { x-=3.14;
+    k++;
+ }
+ float sum=1, t=1;
+ for(i=1;i<=5;i++)
+    {
+        t=t*(-1)*x*x/(2*i*(2*i-1));
+        sum=sum+t;
+    }
+    if(k%2!=0)
+    return -sum;
+    else
+      return sum;
+}
+
+float sin(float x)
+{
+int i=0;
+float  sum=x, t=x;
+for(i=1;i<=5;i++)
+    {
+        t=(t*(-1)*x*x)/(2*i*(2*i+1));
+        sum=sum+t;
+    }
+return sum;
+}
+
+   float acos(float x)
+   {
+
+       float aq2;
+       aq2=1.57-(x+((x*x*x)/6 +((3*x*x*x*x*x)/40)));
+
+       return aq2;
+
+   }
+
+
+
+
+
+void algo(int longit, int latit, int timezone, int day, int month)
+{
+
+
+//         t1=1;
+  //       t2=1;
+
+        longi = longit/100;
+        float lati;
+        lati = latit/100;
+        int m=month;
+        int d=day;
+        //cout<<"Enter day: ";
+        //cin>>d;
+        //cout<<"\nEnter month: ";
+        //cin>>m;
+        //cout<<"\nEnter longitude: ";
+        //cin>>longi;
+        //cout<<"\nEnter latitude: ";
+        //cin>>lati;
+       int zone=timezone;
+       // cout<<"\nEnter timezone: ";
+        //cin>>zone;
+        float v1=zone/100;
+        float v2=zone%100;
+    //  cout<<v1;
+    //  cout<<v2;
+        float v3=(60*v1+v2);
+    //  cout<<v3;
+        float pm=v3/4;
+    //  cout<<pm;
+        float t3=(longi-pm);
+        t3=t3*4;
+        float snoon;
+            int gf=m-1;
+            int d1;
+            if (d>29)
+
+            {d1=(d/10)-1;
+             snoon=(noon[gf][d1]+(((((d%10)+10)*noon[gf][d1+3]*100/3600))));
+
+            }
+             else
+             { d1=(d/10);
+              snoon=(noon[gf][d1]+((((d%10)*noon[gf][d1+3]*100/3600))));
+            //  cout<<snoon;
+             }
+           //  cout<<t1;
+             snoon=snoon-(t3/60)*100;
+             //cout<<"\n"<<snoon;
+              int a[12]={0,31,59,90,120,151,181,212,242,273,303,334};
+         int numday;
+          numday=(10+a[m-1]+d);
+
+          //    printf("numday %d \n",numday);
+            volatile float e;
+            e=((numday*0.9863*3.14)/180);
+                //printf("e %f \n",e);
+         float dec;                    // solar declination in degree
+           dec=cos(e);
+            dec*=-23.44;
+            //printf("dec %f \n",dec);
+        /* float ha1=-tan((lati[j]*22/7)/180)*tan((dec*22/7)/180);// previous algo
+            //printf("ha1 %f \n",ha1);
+         float ha=(acos(ha1)*180)/(15*22/7)+0.1;
+          //    printf("ha %f \n",ha);*/
+        volatile float ha1=( sin((-6*3.14)/180) - sin((lati*3.14)/180)*sin((dec*3.14)/180))  /( cos((lati*3.14)/180)*cos((dec*3.14)/180) );
+         volatile float ha=(acos(ha1)*180)/(15*3.14);//+0.1;
+         int sun=ha*100;
+         int sunrise=snoon-sun;
+
+            int h1=sunrise/100;
+            int m1=(int)(snoon-sun);
+            //printf("m1 %d \n",m1);
+                     m1=((m1%100)*60)/100;
+
+            t1=h1*100+m1;
+
+
+          int sunset=snoon+sun;
+
+             int h=sunset/100;
+              int m2=((int)((snoon)+(sun)));
+                     m2=(m2%100);
+                       m2=(m2*60)/100;
+            t2=h*100+m2;
+           // cout<<"\n Sunrise: "<<cSrise;
+           // cout<<"\n Sunset: "<<cSset;
+
+}
